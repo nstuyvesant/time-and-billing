@@ -74,6 +74,7 @@ Three Salesforce Apex classes will be created:
   - **Gross Profit** - Revenue - COGS
   - **Gross Margin** - (Revenue - COGS) / Revenue
   - **Burns Entitlement** - Looked up from Account, used to determine whether time entry falls into entitlement period
+  - **Opportunity** - Set by method using the Opportunity.Jira Issue field. Known gap: time logged against a Jira Issue that is a child or grandchild of the Jira Issue associated with the Opportunity.
 
 - **Time Entries with Accounts** Custom Report Type
 
@@ -94,13 +95,3 @@ Three Salesforce Apex classes will be created:
 - Salesforce limits the number of queries, data manipulation language (DML), and REST Callouts on a per hour basis. The code is designed to bulkify requests often at the expense of simplicity.
 - This integration will not detect Tempo Work Logs deleted that were previously synchronized.
 - When deploying code from Salesforce Sandbox to Production, pick "Run specified tests" and paste TimeAndBillingMonthlySpec,TimeAndBillingSpec,TimeAndBillingServiceSpec,TimeAndBillingDailySpec into the text area field then click OK.
-
-## Logic for billing against burndown
-- As we iterate through time entries to bill, Account.Remaining Hours will not dynamically update
-- We could set a variable for the first time entry for that account, then deduct hours as we go
-- currentAccount = null
-- For time entries
--   if currentAccount != thisAccount 
-- If Account.Entitlement Remaining < 0, burndown is not relevant
-- If TODAY < Account.Entitlement Start OR TODAY > Entitlement Ends, burndown is not relevant
-- 
