@@ -1,6 +1,10 @@
 @RestResource(urlMapping='/issue/*')
 global with sharing class TimeAndBillingService {
+
+  private static final String COMPANY_ACCOUNT_NAME = 'Utilant, LLC';
+
   
+  // Take a Salesforce Lightning URL and return the record Id (return null for bad urls)
   private static ID getSalesforceId(String url) {
     if (url == null) return null;
     Pattern urlPattern = Pattern.compile('.*/lightning/r.*/([a-zA-Z0-9]{15,18})/view');
@@ -9,6 +13,30 @@ global with sharing class TimeAndBillingService {
   }
 
 
+  // Create map of roles and rates for query provided
+  private static Map<String,Decimal> getRatesMap(String sQuery) {
+    List<Rate__c> rates = Database.query(sQuery);
+    Map<String,Decimal> ratesMap = new Map<String,Decimal>();
+    for (Rate__c rate: rates) {
+      ratesMap.put(rate.Role__c, rate.Hourly_Rate__c);
+    }
+    return ratesMap;
+  }
+
+
+  // Query for customer's rates
+  private static Map<String,Decimal> getCustomerRates(ID accountId) {
+    return getRatesMap('SELECT Role__c, Hourly_Rate__c FROM Rate__c WHERE Account__c = \'' + String.valueOf(accountId) + '\' AND Start_Date__c <= TODAY AND End_Date__c >= TODAY');
+  }
+
+
+  // Query for rack rates
+  private static Map<String,Decimal> getRackRates() {
+    return getRatesMap('SELECT Role__c, Hourly_Rate__c FROM Rate__c WHERE Account__r.Name = \'' + COMPANY_ACCOUNT_NAME + '\' AND Start_Date__c <= TODAY AND End_Date__c >= TODAY');
+  }
+
+
+  // Handle PUT from Jira Automation Rule
   @HttpPut
   global static void doPut(String billingType, String accountName, String subject, String issueType, String opportunityUrl) {
     RestRequest req = RestContext.request;
@@ -37,6 +65,10 @@ global with sharing class TimeAndBillingService {
     } catch (Exception eOpportunityLookup) {
       System.debug('No opportunity was found.');
     }
+
+    // Populate rate maps
+    Map<String,Decimal> customerRatesMap = getCustomerRates(accountId);
+    Map<String,Decimal> rackRatesMap = getRackRates();
 
     // Find Time Entries for this Jira Issue
     List<Time_Entry__c> timeEntries = [
@@ -76,6 +108,19 @@ global with sharing class TimeAndBillingService {
         );
         // Add it to the list of upserts (upsert in case we do this multiple times)
         reversedTimeEntries.add(reversedTimeEntry);
+      }
+
+      // If billing was or is now hourly, reset rate to address problem of bug changing to CR
+      if (billing == 'Hourly') {
+        Decimal rate = (Decimal) customerRatesMap.get(timeEntry.Role__c);
+        Decimal companyRate = (Decimal) rackRatesMap.get(timeEntry.Role__c);
+        timeEntry.Hourly_Rate__c = rate != null ? // there is a customer rate
+          rate :
+          companyRate != null ? // there is a rack rate
+          companyRate :
+          0; // No rates for this role exist so use $0
+      } else {
+        timeEntry.Hourly_Rate__c = 0;
       }
 
       // Original gets the updated values
