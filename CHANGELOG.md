@@ -1,9 +1,13 @@
 # Product Backlog
 
 ## Bugs
+- [High] If Jira changes from Bug to Story and Billable, time entries need new rate lookup.
 - [Low] Zendesk ticket import uses the "updated_at" date rather than "solved_at" because of API limitations. As we are importing daily and billing monthly, if updated_at changes, it should not affect invoicing so this is classified as low priority because of that.
 
 ## Features
+- [High] Add "Salesforce Opportunity" field to relevant Jira Projects
+- [High] Populate "Salesforce Opportunity" field for existing Jira Issues
+- [High] Change TimeAndBillingService and TimeAndBilling.syncTempoToSalesforce() to pass "Salesforce Opportunity" instead of "Billing" and to link Time_Entry__c records to Opportunities using extracted value.
 - [Low] Once Tempo fixes their REST API to not strip out names for GET /work-attributes/{key}, update API names of the Activity Picklist Value Set in Salesforce
 - [Medium] Refactor syncZendeskToSalesforce() to improve testability, readibility and promote DRY
 - [Medium] Refactor generateInvoicesSummarized() to improve testability, readibility and promote DRY
