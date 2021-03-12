@@ -50,12 +50,14 @@ global with sharing class TimeAndBillingService {
     }
 
     // Get Account.Id for named customer
-    Account customer = [SELECT Id FROM Account WHERE Name = :accountName LIMIT 1][0];
-    if (customer == null) {
+    ID accountId;
+    try {
+      accountId = [SELECT Id FROM Account WHERE Name = :accountName LIMIT 1].Id;
+    } catch (Exception eNoAccount) {
+      System.debug('Customer not found.');
       res.statusCode = 404;
       return;
     }
-    ID accountId = customer.Id;
 
     // Get Opportunity Id
     String billing = billingType;
@@ -75,43 +77,17 @@ global with sharing class TimeAndBillingService {
       SELECT
         Account__c, Resource__c, Activity__c, Role__c, Date_Worked__c,
         Hours__c, Jira_Issue__c, Notes__c, Worklog_ID__c, Hourly_Rate__c,
-        Hourly_Cost__c, Billed__c, Billing__c, Entitlement__c, Subject__c,
+        Hourly_Cost__c, Billing__c, Entitlement__c, Subject__c,
         Type__c, Opportunity__c
       FROM Time_Entry__c
-      WHERE Jira_Issue__c = :issueKey And Worklog_ID__c != null
+      WHERE Jira_Issue__c = :issueKey And Worklog_ID__c != null AND Billed__c = false
     ];
-
-    // Setup empty list of Time Entries for any reversals needed
-    List<Time_Entry__c> reversedTimeEntries = new List<Time_Entry__c>();
 
     // Loop through Time Entries for this Jira Issue
     for (Time_Entry__c timeEntry: timeEntries) {
-      // Billed Time Entries must be reversed if new Billing value is not 'Hourly'
-      if (timeEntry.Billed__c && billingType != 'Hourly') {
-        // Create reverse time entry
-        Time_Entry__c reversedTimeEntry = new Time_Entry__c(
-          Worklog_ID__c = - timeEntry.Worklog_ID__c, // negative ID so we know easily which one was reversed
-          Account__c = timeEntry.Account__c,
-          Resource__c = timeEntry.Resource__c,
-          Activity__c = timeEntry.Activity__c,
-          Role__c = timeEntry.Role__c,
-          Date_Worked__c = timeEntry.Date_Worked__c,
-          Hours__c = - timeEntry.Hours__c, // negative hours
-          Hourly_Rate__c = timeEntry.Hourly_Rate__c,
-          Hourly_Cost__c = timeEntry.Hourly_Cost__c,
-          Billed__c = false,
-          Billing__c = timeEntry.Billing__c,
-          Jira_Issue__c = timeEntry.Jira_Issue__c,
-          Notes__c = timeEntry.Notes__c,
-          Entitlement__c = timeEntry.Entitlement__c,
-          Opportunity__c = timeEntry.Opportunity__c
-        );
-        // Add it to the list of upserts (upsert in case we do this multiple times)
-        reversedTimeEntries.add(reversedTimeEntry);
-      }
 
-      // If billing was or is now hourly, reset rate to address problem of bug changing to CR
-      if (billing == 'Hourly') {
+      // If unbilled time entry is hourly but without a rate, fix it
+      if (billing == 'Hourly' && timeEntry.Hourly_Rate__c == 0) {
         Decimal rate = (Decimal) customerRatesMap.get(timeEntry.Role__c);
         Decimal companyRate = (Decimal) rackRatesMap.get(timeEntry.Role__c);
         timeEntry.Hourly_Rate__c = rate != null ? // there is a customer rate
@@ -119,24 +95,20 @@ global with sharing class TimeAndBillingService {
           companyRate != null ? // there is a rack rate
           companyRate :
           0; // No rates for this role exist so use $0
-      } else {
+      } else { // all others should have a $0 rate
         timeEntry.Hourly_Rate__c = 0;
       }
 
       // Original gets the updated values
       timeEntry.Billing__c = billing;
-      timeEntry.Billed__c = false;
       timeEntry.Subject__c = subject;
       timeEntry.Type__c = issueType;
       timeEntry.Account__c = accountId;
       timeEntry.Opportunity__c = opportunityId;
     }
     
-    System.debug(timeEntries);
     update timeEntries;
-
-    System.debug(reversedTimeEntries);
-    upsert reversedTimeEntries Worklog_ID__c;
+    System.debug(timeEntries);
 
     res.statusCode = 204; // Successfully updated
   }

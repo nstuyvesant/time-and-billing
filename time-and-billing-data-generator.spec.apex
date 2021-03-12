@@ -73,6 +73,33 @@ public class TimeAndBillingDataGenerator {
 
     insert accounts;
 
+    List<Opportunity> opportunities = new List<Opportunity>();
+
+    Opportunity newSubscriptionOpportunity = new Opportunity(
+      Account = carrierOnSubscription,
+      Name = 'New: Test Subscription Carrier LC360',
+      Type = 'New Logo',
+      Billing__c = 'Subscription (Implementation)',
+      StageName = 'Closed Won',
+      CloseDate = INVOICE_DATE,
+      Contract_Start__c = INVOICE_DATE,
+      Contract_Length__c = 3
+    );
+    opportunities.add(newSubscriptionOpportunity);
+
+    Opportunity upgradeOpportunity = new Opportunity(
+      Account = vendorNotOnSubscription,
+      Name = 'New: Test Non-Subscription Vendor Upgrade',
+      Type = 'Change Request',
+      Billing__c = 'Hourly',
+      StageName = 'Closed Won',
+      CloseDate = INVOICE_DATE,
+      Contract_Start__c = INVOICE_DATE,
+      Contract_Length__c = 3
+    );
+    opportunities.add(upgradeOpportunity);
+    insert opportunities;
+
     List<Rate__c> rates = new List<Rate__c>();
 
     // Next two are "rack rates" because they are associated with the company rather than customer
@@ -186,7 +213,6 @@ public class TimeAndBillingDataGenerator {
     );
     contacts.add(executive);
 
-
     Contact projectManager = new Contact(
       LastName = 'Doe',
       FirstName = 'Jane',
@@ -246,7 +272,8 @@ public class TimeAndBillingDataGenerator {
       Worklog_ID__c = 1,
       Hourly_Rate__c = 100,
       Billing__c = 'Hourly',
-      Billed__c = true
+      Billed__c = true,
+      Opportunity__c = newSubscriptionOpportunity.Id
     );
     jiraTimeEntries.add(jiraBilled);
 
@@ -300,7 +327,8 @@ public class TimeAndBillingDataGenerator {
       Worklog_ID__c = 4,
       Hourly_Rate__c = 100,
       Billing__c = 'Hourly',
-      Billed__c = false
+      Billed__c = false,
+      Opportunity__c = newSubscriptionOpportunity.Id
     );
     jiraTimeEntries.add(jiraUnbilledRole1);
 
@@ -321,6 +349,26 @@ public class TimeAndBillingDataGenerator {
       Billed__c = false
     );
     jiraTimeEntries.add(jiraUnbilledRole2);
+      
+    // Hourly time entry with $0 Hourly Rate
+    Time_Entry__c jiraUnbilledRole3 = new Time_Entry__c(
+      Account__c = carrierNotOnSubscription.Id,
+      Resource__c = executive.Id,
+      Activity__c = 'Discovery',
+      Role__c = 'Executive',
+      Date_Worked__c = DAY_LAST_MONTH,
+      Hours__c = 3.5,
+      Jira_Issue__c = 'PS-001',
+      Type__c = 'Story',
+      Subject__c = 'Test Story',
+      Notes__c = 'Core Sprint Planning',
+      Worklog_ID__c = 6,
+      Hourly_Rate__c = 0,
+      Billing__c = 'Hourly',
+      Billed__c = false,
+      Opportunity__c = newSubscriptionOpportunity.Id
+    );
+    jiraTimeEntries.add(jiraUnbilledRole3);
 
     Time_Entry__c jiraUnbilledNoEntitlement = new Time_Entry__c(
       Account__c = vendorNotOnSubscription.Id,
@@ -328,12 +376,12 @@ public class TimeAndBillingDataGenerator {
       Activity__c = 'Planning',
       Role__c = 'Project Manager',
       Date_Worked__c = DAY_LAST_MONTH,
-      Hours__c = 5,
+      Hours__c = 7,
       Jira_Issue__c = 'VEN-002',
       Type__c = 'Task',
       Subject__c = 'Test Task',
       Notes__c = 'Script to update database',
-      Worklog_ID__c = 6,
+      Worklog_ID__c = 7,
       Hourly_Rate__c = 100,
       Billing__c = 'Hourly',
       Billed__c = false
@@ -351,7 +399,7 @@ public class TimeAndBillingDataGenerator {
       Type__c = 'Bug',
       Subject__c = 'Test Bug',
       Notes__c = 'Test Bug',
-      Worklog_ID__c = 7,
+      Worklog_ID__c = 8,
       Hourly_Rate__c = 0,
       Billing__c = 'None',
       Billed__c = false
@@ -369,7 +417,7 @@ public class TimeAndBillingDataGenerator {
       Type__c = 'Story',
       Subject__c = 'Test Story',
       Notes__c = 'Test Story',
-      Worklog_ID__c = 8,
+      Worklog_ID__c = 9,
       Hourly_Rate__c = 0,
       Billing__c = 'Hourly',
       Billed__c = false
