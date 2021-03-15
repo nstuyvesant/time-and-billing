@@ -95,9 +95,9 @@ global with sharing class TimeAndBillingService {
           companyRate != null ? // there is a rack rate
           companyRate :
           0; // No rates for this role exist so use $0
-      } else { // all others should have a $0 rate
-        timeEntry.Hourly_Rate__c = 0;
       }
+
+      if (billing != 'Hourly') timeEntry.Hourly_Rate__c = 0;
 
       // Original gets the updated values
       timeEntry.Billing__c = billing;
