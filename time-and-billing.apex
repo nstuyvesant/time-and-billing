@@ -1152,7 +1152,7 @@ public class TimeAndBilling {
       String activity = ZENDESK_NONBILLABLE_TYPES.contains(ticketType) ? 'DefectResolution' : 'TechnicalSupport';
 
       // Determine Billing
-      String billingType = 'Subscription (Support)';
+      String billingType = 'Subscription';
       if (activity == 'TechnicalSupport' && notOnSubscription) billingType = 'Hourly';
       else if (activity == 'DefectResolution' || customerId == SUPPORT_NO_CUSTOMER) billingType = 'None';
 

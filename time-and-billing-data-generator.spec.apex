@@ -79,7 +79,7 @@ public class TimeAndBillingDataGenerator {
       Account = carrierOnSubscription,
       Name = 'New: Test Subscription Carrier LC360',
       Type = 'New Logo',
-      Billing__c = 'Subscription (Implementation)',
+      Billing__c = 'Subscription',
       StageName = 'Closed Won',
       CloseDate = INVOICE_DATE,
       Contract_Start__c = INVOICE_DATE,

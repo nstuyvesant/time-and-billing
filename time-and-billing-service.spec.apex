@@ -28,7 +28,7 @@ private class TimeAndBillingServiceSpec {
     
   @isTest
   private static void testPutSubscription() {
-    System.debug('TEST - PUT /issue/{issueKey} with billingType = Subscription (Enhancement) expecting success');
+    System.debug('TEST - PUT /issue/{issueKey} with billingType = Subscription expecting success');
     TimeAndBillingDataGenerator.createTestData(); 
     
     Time_Entry__c timeEntry = [SELECT Id, Account__c, Opportunity__c, Jira_Issue__c FROM Time_Entry__c WHERE Jira_Issue__c = 'PS-001' LIMIT 1][0];
@@ -41,11 +41,11 @@ private class TimeAndBillingServiceSpec {
     req.requestURI = '/issue/' + timeEntry.Jira_Issue__c;
     req.httpMethod = 'PUT';
     RestContext.request = req;
-    req.requestBody = Blob.valueOf('{"billingType": "Subscription (Enhancement)", "accountName":"' + a.Name + '", "subject":"Test subject", "issueType":"Story", "opportunityUrl":"https://utilant.lightning.force.com/lightning/r/' + opp.Id + '/view"}');
+    req.requestBody = Blob.valueOf('{"billingType": "Subscription", "accountName":"' + a.Name + '", "subject":"Test subject", "issueType":"Story", "opportunityUrl":"https://utilant.lightning.force.com/lightning/r/' + opp.Id + '/view"}');
     RestContext.response = res;
 
     Test.startTest();
-    TimeAndBillingService.doPut('Subscription (Enhancement)', a.Name, 'Test subject', 'Story', 'https://utilant.lightning.force.com/lightning/r/' + opp.Id + '/view');
+    TimeAndBillingService.doPut('Subscription', a.Name, 'Test subject', 'Story', 'https://utilant.lightning.force.com/lightning/r/' + opp.Id + '/view');
     System.assertEquals(res.statusCode, 204);
     Test.stopTest();
   }
@@ -67,11 +67,11 @@ private class TimeAndBillingServiceSpec {
     req.httpMethod = 'PUT';
 
     RestContext.request = req;
-    req.requestBody = Blob.valueOf('{"billingType": "Subscription (Enhancement)", "accountName":"' + a.Name + '", "subject":"Test subject", "issueType":"Story", "opportunityUrl":"https://utilant.lightning.force.com/lightning/r/0061U00000GI8XcQAL/view"}');
+    req.requestBody = Blob.valueOf('{"billingType": "Subscription", "accountName":"' + a.Name + '", "subject":"Test subject", "issueType":"Story", "opportunityUrl":"https://utilant.lightning.force.com/lightning/r/0061U00000GI8XcQAL/view"}');
     RestContext.response = res;
 
     Test.startTest();
-    TimeAndBillingService.doPut('Subscription (Enhancement)', a.Name, 'Test subject', 'Story', 'https://utilant.lightning.force.com/lightning/r/0061U00000GI8XcQAL/view');
+    TimeAndBillingService.doPut('Subscription', a.Name, 'Test subject', 'Story', 'https://utilant.lightning.force.com/lightning/r/0061U00000GI8XcQAL/view');
     Test.stopTest();
     System.assertEquals(res.statusCode, 400);
   }
