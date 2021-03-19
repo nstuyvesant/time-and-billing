@@ -64,6 +64,7 @@ global with sharing class TimeAndBillingService {
     ID opportunityId = getSalesforceId(opportunityUrl);
     try {
       billing = [SELECT Billing__c FROM Opportunity WHERE Id = :opportunityId].Billing__c;
+      if (billing == null) billing = billingType;
     } catch (Exception eOpportunityLookup) {
       System.debug('No opportunity was found.');
     }
@@ -75,10 +76,7 @@ global with sharing class TimeAndBillingService {
     // Find Time Entries for this Jira Issue
     List<Time_Entry__c> timeEntries = [
       SELECT
-        Account__c, Resource__c, Activity__c, Role__c, Date_Worked__c,
-        Hours__c, Jira_Issue__c, Notes__c, Worklog_ID__c, Hourly_Rate__c,
-        Hourly_Cost__c, Billing__c, Entitlement__c, Subject__c,
-        Type__c, Opportunity__c
+        Account__c, Hourly_Rate__c, Billing__c, Type__c, Subject__c, Opportunity__c, Role__c
       FROM Time_Entry__c
       WHERE Jira_Issue__c = :issueKey And Worklog_ID__c != null AND Billed__c = false
     ];
