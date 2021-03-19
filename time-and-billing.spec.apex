@@ -296,7 +296,7 @@ private class TimeAndBillingSpec {
     
     
   // Test timeEntryToOpportunity()
-  @isTest static void timeEntryToOpportunity() {
+  @isTest static void testTimeEntryToOpportunity() {
     System.debug('TESTING TimeAndBilling.timeEntryToOpportunity().');
       
     Date fromDate = date.newInstance(2021, 1, 1);
@@ -307,6 +307,18 @@ private class TimeAndBillingSpec {
 	  TimeAndBilling.timeEntryToOpportunity(fromDate, toDate);
     Test.stopTest();
   }
+
+
+  // Test updateHoursActual()
+  @isTest static void testUpdateHoursActual() {
+    System.debug('TESTING TimeAndBilling.updateHoursActual().');
+
+    // Wrap asynchronous call
+    Test.startTest();
+	  TimeAndBilling.updateHoursActual();
+    Test.stopTest();
+  }
+
 
   // Test generateHourlyInvoices()
   // Coverage gaps:

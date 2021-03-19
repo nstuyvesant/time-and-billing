@@ -937,6 +937,7 @@ public class TimeAndBilling {
       List<TempoWorklog> tempoWorklogs = getWorklogsFromTempo(syncDate, logEntries);
       List<Time_Entry__c> timeEntries = workLogsToTimeEntries(syncDate, tempoWorklogs, logEntries);
       upsertWorklogsToSalesforce(timeEntries, logEntries);
+      updateHoursActual();
     } catch (Exception eUpsertWorklogs) {
       System.debug(eUpsertWorklogs.getMessage());
     }
@@ -1217,6 +1218,27 @@ public class TimeAndBilling {
     }
     update timeEntries;
   }
+
+
+  // Update Opportunity Hours (Actual) from Time Entries
+  public static void updateHoursActual() {
+    AggregateResult[] groupedResults = [
+      SELECT SUM(Hours__c), Opportunity__c
+      FROM Time_Entry__c
+      WHERE Billing__c != 'None' AND Opportunity__c != null
+      GROUP BY Opportunity__c
+    ];
+    List<Opportunity> opportunities = new List<Opportunity>();
+    for (AggregateResult ar : groupedResults) {
+      Opportunity opportunity = new Opportunity(
+        Id = (ID) ar.get('Opportunity__c'),
+        Hours_Actual__c = (Decimal) ar.get('expr0')
+      );
+      opportunities.add(opportunity);
+    }
+    update opportunities;
+  }
+
 
 
   // Return list of Time Entries not billed that are billable on an hourly basis (or deduct from burndown)
