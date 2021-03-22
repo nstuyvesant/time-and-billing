@@ -36,7 +36,7 @@ global with sharing class TimeAndBillingService {
   }
 
 
-  // Handle PUT from Jira Automation Rule
+  // Handle PUT from Jira Automation Rule for changes to key Jira Issue fields
   @HttpPut
   global static void doPut(String billingType, String accountName, String subject, String issueType, String opportunityUrl) {
     RestRequest req = RestContext.request;
@@ -45,6 +45,7 @@ global with sharing class TimeAndBillingService {
     // Bail out if bad Jira Issue key
     String issueKey = req.requestURI.substring(req.requestURI.lastIndexOf('/') + 1);
     if (issueKey == null || issueKey == '') {
+      System.debug('Issue Key not specified.');
       res.statusCode = 400;
       return;
     }
@@ -59,7 +60,7 @@ global with sharing class TimeAndBillingService {
       return;
     }
 
-    // Get Opportunity Id
+    // Get Opportunity Id to link to Time Entry
     String billing = billingType;
     ID opportunityId = getSalesforceId(opportunityUrl);
     try {
@@ -76,32 +77,39 @@ global with sharing class TimeAndBillingService {
     // Find Time Entries for this Jira Issue
     List<Time_Entry__c> timeEntries = [
       SELECT
-        Account__c, Hourly_Rate__c, Billing__c, Type__c, Subject__c, Opportunity__c, Role__c
+        Account__c, Billed__c, Hourly_Rate__c, Billing__c, Role__c,
+        Opportunity__c, Type__c, Subject__c
       FROM Time_Entry__c
-      WHERE Jira_Issue__c = :issueKey And Worklog_ID__c != null AND Billed__c = false
+      WHERE Jira_Issue__c = :issueKey AND Worklog_ID__c != null
     ];
 
     // Loop through Time Entries for this Jira Issue
     for (Time_Entry__c timeEntry: timeEntries) {
 
-      // If unbilled time entry is hourly but without a rate, fix it
-      if (billing == 'Hourly' && timeEntry.Hourly_Rate__c == 0) {
-        Decimal rate = (Decimal) customerRatesMap.get(timeEntry.Role__c);
-        Decimal companyRate = (Decimal) rackRatesMap.get(timeEntry.Role__c);
-        timeEntry.Hourly_Rate__c = rate != null ? // there is a customer rate
-          rate :
-          companyRate != null ? // there is a rack rate
-          companyRate :
-          0; // No rates for this role exist so use $0
-      }
+      // If time entry billed, only update Subject, Type, Opportunity
+      if (!timeEntry.Billed__c) {
 
-      if (billing != 'Hourly') timeEntry.Hourly_Rate__c = 0;
+        // If hourly without rate, fix
+        if (billing == 'Hourly' && timeEntry.Hourly_Rate__c == 0) {
+          Decimal rate = (Decimal) customerRatesMap.get(timeEntry.Role__c);
+          Decimal companyRate = (Decimal) rackRatesMap.get(timeEntry.Role__c);
+          timeEntry.Hourly_Rate__c = rate != null ? // there is a customer rate
+            rate :
+            companyRate != null ? // there is a rack rate
+            companyRate :
+            0; // No rates for this role exist so use $0
+        }
 
-      // Original gets the updated values
-      timeEntry.Billing__c = billing;
+        // All non-hourly time entries should have $0 rate
+        if (billing != 'Hourly') timeEntry.Hourly_Rate__c = 0;
+
+        timeEntry.Account__c = accountId;
+        timeEntry.Billing__c = billing;
+      } // not billed
+
+      // Updated whether billed or not
       timeEntry.Subject__c = subject;
       timeEntry.Type__c = issueType;
-      timeEntry.Account__c = accountId;
       timeEntry.Opportunity__c = opportunityId;
     }
     
