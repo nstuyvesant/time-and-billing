@@ -3,7 +3,7 @@ global with sharing class TimeAndBillingService {
 
   private static final String COMPANY_ACCOUNT_NAME = 'Utilant, LLC';
 
-  
+
   // Take a Salesforce Lightning URL and return the record Id (return null for bad urls)
   private static ID getSalesforceId(String url) {
     if (url == null) return null;
@@ -41,7 +41,7 @@ global with sharing class TimeAndBillingService {
   global static void doPut(String billingType, String accountName, String subject, String issueType, String opportunityUrl) {
     RestRequest req = RestContext.request;
     RestResponse res = RestContext.response;
-    
+
     // Bail out if bad Jira Issue key
     String issueKey = req.requestURI.substring(req.requestURI.lastIndexOf('/') + 1);
     if (issueKey == null || issueKey == '') {
