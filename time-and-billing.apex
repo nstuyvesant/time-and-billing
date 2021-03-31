@@ -24,7 +24,8 @@ public class TimeAndBilling {
   private class JiraFields {
     private string summary;
     private JiraIssueType issuetype;
-    private JiraField customfield_10090;
+    private JiraField customfield_10090; // Billing
+    private string customfield_10113; // Salesforce Opportunity
   }
 
   private class JiraIssue {
@@ -245,6 +246,15 @@ public class TimeAndBilling {
   }
 
 
+  // Take a Salesforce Lightning URL and return the record Id (return null for bad urls)
+  public static ID getSalesforceId(String url) {
+    if (url == null) return null;
+    Pattern urlPattern = Pattern.compile('.*/lightning/r.*/([a-zA-Z0-9]{15,18})/view');
+    Matcher urlMatcher = urlPattern.matcher(url);
+    return urlMatcher.matches() ? (ID) urlMatcher.group(1) : null;
+  }
+
+
   // Set headers, method, and URI for REST Callouts
   private static HttpRequest setupHttpRequest(string method, string endPoint) {
     HttpRequest request = new HttpRequest();
@@ -260,6 +270,7 @@ public class TimeAndBilling {
   private static HttpResponse tempoApi(String method, String api, String endpoint, String jsonBody) {
     String uri = TEMPO_CALLOUT + api + endpoint;
     HttpRequest request = setupHttpRequest(method, uri);
+    request.setTimeout(30000);
 
     // Workaround for non-standard credential passing
     request.setHeader('Authorization', 'Bearer {!$Credential.Password}');
@@ -473,10 +484,12 @@ public class TimeAndBilling {
 
     // Search for issues with worklogs updated since syncDate
     JiraQuery jiraQuery = new JiraQuery();
-    jiraQuery.jql = 'updatedDate>=' + syncDate.format('yyyy-MM-dd', 'GMT'); // previously lacked GMT
+    // Filtering on worklogDate >= 2021-01-01 means "only show issues with a worklog" (dropped ,'GMT' from syncDate.format)
+    jiraQuery.jql = 'worklogDate >= 2021-01-01 AND project in (AM,CAR,CP,DS,IMTI,ISD,PS,VEN,UT) AND updatedDate>=' + syncDate.format('yyyy-MM-dd');
+    System.debug(jiraQuery.jql);
     // BUG/FLAW: Jira IGNORES maxResults = 1000 unless the fields are id or key - otherwise 100
     jiraQuery.maxResults = 1000;
-    jiraQuery.fields = new String[]{'issuetype', 'summary', 'customfield_10090'};
+    jiraQuery.fields = new String[]{'issuetype', 'summary', 'customfield_10090', 'customfield_10113'};
     jiraQuery.startAt = 0;
 
     try {
@@ -703,6 +716,10 @@ public class TimeAndBilling {
       // Get resource (Contact) by translating worklog's accountId
       JiraUser jiraUser = (JiraUser) usersMap.get(worklog.author.accountId);
       Contact resource = (Contact) resourcesMap.get(jiraUser.emailAddress);
+      if (resource == null) {
+        System.debug('Jira User ' + worklog.author.displayName + ' needs a matching Utilant Contact email. Please fix and resync.');
+        continue;
+      }
 
       // Flag missing hourly costs for resources
       if (resource.Hourly_Cost__c == null) {
@@ -716,6 +733,18 @@ public class TimeAndBilling {
 
       // Determine whether the issue is billable
       JiraFields issueFields = (JiraFields) issueFieldsMap.get(worklog.issue.key);
+
+      // In most cases, the Jira Issue is not in the map because of a date time zone issue
+      if (issueFields == null) {
+        String msg = worklog.issue.key + ' not found in issueFieldsMap for ' + String.valueOf(worklog.startDate);
+        logEntry = createLogEntry('Jira: Issue not found', 'Failure', msg,
+          JSON.serializePretty(worklog), null);
+        logEntries.add(logEntry);
+        System.debug(msg);
+        System.debug(JSON.serializePretty(worklog));
+        continue;
+      }
+
       String billingType = issueFields != null && issueFields.customfield_10090 != null && issueFields.customfield_10090.value != null ? issueFields.customfield_10090.value : 'None';
       Boolean isBillable = activity != 'DefectResolution' && billingType == 'Hourly'; // defects should never be billable, but accidents can happen
 
@@ -753,7 +782,8 @@ public class TimeAndBilling {
         Jira_Issue__c = worklog.issue.key,
         Notes__c = worklog.description,
         Type__c = issueFields.issuetype.name,
-        Subject__c = issueFields.summary // max 255
+        Subject__c = issueFields.summary, // max 255
+        Opportunity__c = getSalesforceId(issueFields.customfield_10113)
       ));
     } // for
 
@@ -774,10 +804,11 @@ public class TimeAndBilling {
       logEntries.add(logEntry);
       System.debug(msg);
     } catch (Exception eUpsertTimeEntries) {
+      String msg = 'Did not upsert ' + String.valueOf(timeEntries.size()) + ' time entries. ';
       logEntry = createLogEntry('Salesforce: Upsert Time Entries', 'Failure',
-        'Upserted time entries', null, JSON.serializePretty(timeEntries));
+        msg, null, JSON.serializePretty(timeEntries));
       logEntries.add(logEntry);
-      System.debug(logEntry);
+      System.debug(msg + eUpsertTimeEntries.getStackTraceString());
     }
   }
 
@@ -937,9 +968,11 @@ public class TimeAndBilling {
       List<TempoWorklog> tempoWorklogs = getWorklogsFromTempo(syncDate, logEntries);
       List<Time_Entry__c> timeEntries = workLogsToTimeEntries(syncDate, tempoWorklogs, logEntries);
       upsertWorklogsToSalesforce(timeEntries, logEntries);
-      updateHoursActual();
+      // updateHoursActual();
     } catch (Exception eUpsertWorklogs) {
       System.debug(eUpsertWorklogs.getMessage());
+
+      System.debug(eUpsertWorklogs.getStackTraceString());
     }
 
     // Insert any logEntries accumulated
@@ -1221,6 +1254,7 @@ public class TimeAndBilling {
 
 
   // Update Opportunity Hours (Actual) from Time Entries
+  @future
   public static void updateHoursActual() {
     AggregateResult[] groupedResults = [
       SELECT SUM(Hours__c), Opportunity__c
@@ -1247,7 +1281,7 @@ public class TimeAndBilling {
       SELECT Account__c, Resource__c, Role__c, Hourly_Cost__c, Hourly_Rate__c, Date_Worked__c, Hours__c,
         Notes__c, Billing__c, Billed__c, Jira_Issue__c, Zendesk_Ticket__c, Worklog_ID__c,
         Account__r.Name, Account__r.c2g__CODASalesTaxStatus__c, Account__r.Platform__c,
-        Account__r.Not_on_subscription__c, Type__c, Subject__c
+        Account__r.Not_on_subscription__c, Type__c, Subject__c, Opportunity__c
       FROM Time_Entry__c
       WHERE
         Billed__c = false AND Billing__c = 'Hourly' AND Date_Worked__c <= :endDate AND Account__r.Platform__c = :customerType
@@ -1432,7 +1466,8 @@ public class TimeAndBilling {
           Worklog_ID__c = timeEntry.Worklog_ID__c != null ? - timeEntry.Worklog_ID__c : null,
           Zendesk_Ticket__c = timeEntry.Zendesk_Ticket__c != null ? - timeEntry.Zendesk_Ticket__c : null,
           Type__c = timeEntry.Type__c,
-          Subject__c = timeEntry.Subject__c
+          Subject__c = timeEntry.Subject__c,
+          Opportunity__c = timeEntry.Opportunity__c
         );
         splitTimeEntries.add(splitTimeEntry);
 
