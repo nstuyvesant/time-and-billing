@@ -971,14 +971,13 @@ public class TimeAndBilling {
       timeEntries = workLogsToTimeEntries(syncDate, tempoWorklogs, logEntries);
       upsertWorklogsToSalesforce(timeEntries, logEntries);
       // updateHoursActual();
+      // Insert any logEntries accumulated
+      System.debug('Inserted ' + String.valueOf(timeEntries.size()) + ' time entries. Now inserting ' + String.valueOf(logEntries.size()) + ' log entries.');
+      insert logEntries;
     } catch (Exception eUpsertWorklogs) {
       System.debug(eUpsertWorklogs.getMessage());
       System.debug(eUpsertWorklogs.getStackTraceString());
     }
-
-    // Insert any logEntries accumulated
-    System.debug('Inserted ' + String.valueOf(timeEntries.size()) + ' time entries. Now inserting ' + String.valueOf(logEntries.size()) + ' log entries.');
-    insert logEntries;
   }
 
 
