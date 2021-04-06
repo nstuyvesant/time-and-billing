@@ -14,18 +14,19 @@ public class TimeAndBilling {
   }
 
   private class JiraField {
-    private string value;
+    private String value;
   }
 
   private class JiraIssueType {
-    private string name;
+    private String name;
   }
 
   private class JiraFields {
     private string summary;
     private JiraIssueType issuetype;
     private JiraField customfield_10090; // Billing
-    private string customfield_10113; // Salesforce Opportunity
+    private String customfield_10113; // Salesforce Opportunity
+    private JiraField customfield_10086; // Salesforce Account
   }
 
   private class JiraIssue {
@@ -204,9 +205,10 @@ public class TimeAndBilling {
   private static final String ZENDESK_BASE_URI = 'https://utilant.zendesk.com/api/v2';
   private static final String ZENDESK_ENDPOINT = 'callout:Zendesk/api/v2';
   private static final Integer ZENDESK_MAX_RECORDS = 100;
-  private static final String[] ZENDESK_NONBILLABLE_TYPES = new String[]{'Defect', 'Incident', 'Service degradation', 'Outage'};
+  private static final String[] ZENDESK_NONBILLABLE_TYPES = new String[]{'Defect', 'Incident', 'Service degradation', 'Outage'}; // latter 2 are deprecated
   private static final Long ZENDESK_SECONDS_FIELD = 360030708654L;
   private static final Long ZENDESK_TYPE_FIELD = 360030745593L;
+  private static final Integer DML_ROW_BUFFER = 50; // prevent DML 10K limit from being hit
 
 
   // Get Map of SObject from List<SObject> using one or more fields separated by semicolons
@@ -339,7 +341,7 @@ public class TimeAndBilling {
     }
     List<Time_Entry__c> timeEntriesToDelete = [SELECT Id FROM Time_Entry__c WHERE Worklog_ID__c IN :worklogIds];
     delete timeEntriesToDelete;
-    System.debug(timeEntriesToDelete);
+    System.debug('Deleted ' + String.valueOf(timeEntriesToDelete.size()) + ' time entries from Salesforce to match deletions in Tempo.');
   }
 
 
@@ -412,7 +414,7 @@ public class TimeAndBilling {
         tempoWorklogs.addAll(deserializedResponse.results);
 
         offset += 1000;
-      } while (deserializedResponse.metadata.next != null && offset <= 10000);
+      } while (deserializedResponse.metadata.next != null && offset < 10000);
     } catch (Exception eTempoWorklogs) {
       System.debug('Fail: Getting worklogs from Tempo - ' + eTempoWorklogs.getMessage());
     }
@@ -486,10 +488,9 @@ public class TimeAndBilling {
     JiraQuery jiraQuery = new JiraQuery();
     // Filtering on worklogDate >= 2021-01-01 means "only show issues with a worklog" (dropped ,'GMT' from syncDate.format)
     jiraQuery.jql = 'worklogDate >= 2021-01-01 AND project in (AM,CAR,CP,DS,IMTI,ISD,PS,VEN,UT) AND updatedDate>=' + syncDate.format('yyyy-MM-dd');
-    System.debug(jiraQuery.jql);
     // BUG/FLAW: Jira IGNORES maxResults = 1000 unless the fields are id or key - otherwise 100
     jiraQuery.maxResults = 1000;
-    jiraQuery.fields = new String[]{'issuetype', 'summary', 'customfield_10090', 'customfield_10113'};
+    jiraQuery.fields = new String[]{'issuetype', 'summary', 'customfield_10090', 'customfield_10113', 'customfield_10086'};
     jiraQuery.startAt = 0;
 
     try {
@@ -526,9 +527,15 @@ public class TimeAndBilling {
   }
 
 
-  // List of customers from Salesforce
+  // List of customers (and prospects) from Salesforce
   private static List<Account> getCustomersFromSalesforce() {
-    return [SELECT Id, Name, Platform__c, Owner.Name, Owner.Email, Not_on_subscription__c FROM Account WHERE Type = 'Customer' AND Platform__c != null];
+    return [
+      SELECT Id, Name, Platform__c, Owner.Name, Owner.Email, Not_on_subscription__c
+      FROM Account
+      WHERE (Type IN ('Customer','Prospect') AND
+        Platform__c != null) OR Name = :COMPANY_ACCOUNT_NAME
+      ORDER BY Platform__c, Name
+    ];
   }
 
 
@@ -585,17 +592,14 @@ public class TimeAndBilling {
       TempoWorklog worklog = (TempoWorklog) worklogsMap.get((Long) billedTimeEntry.Worklog_ID__c);
       Decimal hours = worklog.timeSpentSeconds / 3600;
 
-      // if key information didn't change, skip reversal
-      if (
-        worklog.startDate == billedTimeEntry.Date_Worked__c &&
-        hours == billedTimeEntry.Hours__c
-        // Rates and roles are tied to Date Worked - if changed, do not rewrite history
-      ) {
+      // if hours did not change, ignore (changes in Tempo to date worked will create new Worklog ID)
+      if (hours == billedTimeEntry.Hours__c) {
         continue;
       }
 
+      System.debug('Original hours: ' + String.valueOf(billedTimeEntry.Hours__c) + ', New hours: ' + String.valueOf(hours));
+
       Time_Entry__c reversedTimeEntry = new Time_Entry__c(
-        Worklog_ID__c = - billedTimeEntry.Worklog_ID__c, // negative ID so we know easily which one was reversed
         Account__c = billedTimeEntry.Account__c,
         Resource__c = billedTimeEntry.Resource__c,
         Activity__c = billedTimeEntry.Activity__c,
@@ -607,8 +611,7 @@ public class TimeAndBilling {
         Billed__c = false,
         Billing__c = billedTimeEntry.Billing__c,
         Jira_Issue__c = billedTimeEntry.Jira_Issue__c,
-        Zendesk_Ticket__c = billedTimeEntry.Zendesk_Ticket__c,
-        Notes__c = billedTimeEntry.Notes__c,
+        Notes__c = billedTimeEntry.Notes__c + ' Original Worklog ID: ' + billedTimeEntry.Worklog_ID__c,
         Entitlement__c = billedTimeEntry.Entitlement__c,
         Type__c = billedTimeEntry.Type__c,
         Subject__c = billedTimeEntry.Subject__c
@@ -620,11 +623,11 @@ public class TimeAndBilling {
 
     // Log original time entries that were reversed along with new values
     if (reversedTimeEntries.size() > 0) {
-      Time_Billing_Audit__c logEntry = createLogEntry('Salesforce: Reverse Time Entries', 'Success',
-        'Upserted time entries that were already billed. Created negative time entries to offset and created replacements.',
+      String msg = 'Reversed ' + String.valueOf(reversedTimeEntries.size()) + ' previously billed Time Entry records.';
+      Time_Billing_Audit__c logEntry = createLogEntry('Salesforce: Reverse Time Entries', 'Success', msg, 
         JSON.serializePretty(billedTimeEntries), JSON.serializePretty(reversedTimeEntries));
       logEntries.add(logEntry);
-      System.debug('Success: Reversed ' + String.valueOf(reversedTimeEntries.size()) + ' previously billed Time Entry records.');
+      System.debug(msg);
     }
   } // method revereBilledTimeEntries()
 
@@ -676,40 +679,10 @@ public class TimeAndBilling {
     for (TempoWorklog worklog: worklogs) {
       // Get attributes associated with this worklog (activity and customer's Account.Id)
       Map<String,String> attributesMap = getAttributesMap(worklog.attributes.values);
+
       // TODO: Once Tempo fixes their API to not strip out spaces, update the API names of the Activity Picklist Value Set in Salesforce
       String activity = (String) attributesMap.get('_Activity_');
       activity = activity == null ? 'Task' : activity; // Default to task if not set
-      ID customerId = (ID) attributesMap.get('_Account_');
-
-      // Get Account Name from Tempo (Ids in Tempo are for Salesforce Production Accounts - not Sandbox)
-      String customerName = (String) tempoAccountsMap.get(customerId);
-      // if Tempo Worklog lacks an Account, default to COMPANY_ACCOUNT_NAME
-      customerName = customerName == null ? COMPANY_ACCOUNT_NAME : customerName;
-
-      // Get Salesforce Id for Account Name retrieved from Tempo
-      Account customer = (Account) salesforceCustomersMap.get(customerName);
-      ID IdFromNameLookup;
-      Boolean onSubscription = false;
-      if (customer != null) {
-        IdFromNameLookup = customer.Id;
-        onSubscription = !customer.Not_on_subscription__c;
-      }
-
-      // if the Ids do not match, use the second one (workaround for dealing with different Account Ids in Sandbox)
-      customerId = customerId == IdFromNameLookup ? customerId : IdFromNameLookup;
-
-      // Special case if it's the company
-      customerId = customerName == COMPANY_ACCOUNT_NAME ? companyId : customerId;
-
-      // Handle possibility of missing Account (probably in Sandbox) - log problem and skip to next
-      if (customerId == null) {
-        logEntry = createLogEntry('Salesforce: Customer Lookup', 'Warning',
-          customerName + ' could not be found in this instance of Salesforce. Please add the Account. The rest of the worklogs will be loaded.',
-          JSON.serializePretty(worklog), null);
-        logEntries.add(logEntry);
-        System.debug(logEntry);
-        continue;
-      }
 
       if (worklog.author.accountId == '557058:f58131cb-b67d-43c7-b30d-6b58d40bd077') continue; // Automation for Jira User
 
@@ -731,13 +704,13 @@ public class TimeAndBilling {
         System.debug(logEntry);
       }
 
-      // Determine whether the issue is billable
+      // Retrieve Jira fields (Account, Billing, and Salesforce Opportunity)
       JiraFields issueFields = (JiraFields) issueFieldsMap.get(worklog.issue.key);
 
-      // In most cases, the Jira Issue is not in the map because of a date time zone issue
+      // No fields because Jira Issue not found? Skip time entry and log.
       if (issueFields == null) {
-        String msg = worklog.issue.key + ' not found in issueFieldsMap for ' + String.valueOf(worklog.startDate);
-        logEntry = createLogEntry('Jira: Issue not found', 'Failure', msg,
+        String msg = worklog.issue.key + ' not found in issueFieldsMap for ' + String.valueOf(worklog.startDate) + '. In most cases, this means the Jira Issue was not modified as of the worklog startDate or the Jira Issue was deleted.';
+        logEntry = createLogEntry('Jira: Issue lookup', 'Failure', msg,
           JSON.serializePretty(worklog), null);
         logEntries.add(logEntry);
         System.debug(msg);
@@ -745,7 +718,21 @@ public class TimeAndBilling {
         continue;
       }
 
-      String billingType = issueFields != null && issueFields.customfield_10090 != null && issueFields.customfield_10090.value != null ? issueFields.customfield_10090.value : 'None';
+      // Lookup customer using Jira custom field 10086
+      String customerName = issueFields.customfield_10086 != null && issueFields.customfield_10086.value != null ? issueFields.customfield_10086.value : COMPANY_ACCOUNT_NAME;
+      Account customer = (Account) salesforceCustomersMap.get(customerName);
+      if (customer == null) {
+        String msg = customerName + ' not found in Salesforce. Make sure this account exists in the Salesforce environment; Production accounts are synchronized with Tempo while Sandbox accounts are not.';
+        logEntry = createLogEntry('Salesforce: Customer lookup', 'Failure', msg,
+          JSON.serializePretty(worklog), null);
+        logEntries.add(logEntry);
+        System.debug(msg);
+        continue;
+      }
+
+      ID customerId = customer.Id;
+      Boolean onSubscription = !customer.Not_on_subscription__c;
+      String billingType = issueFields.customfield_10090 != null && issueFields.customfield_10090.value != null ? issueFields.customfield_10090.value : 'None';
       Boolean isBillable = activity != 'DefectResolution' && billingType == 'Hourly'; // defects should never be billable, but accidents can happen
 
       // Determine hourly rate for role (check customer, then company/rack rates, then zero)
@@ -782,13 +769,23 @@ public class TimeAndBilling {
         Jira_Issue__c = worklog.issue.key,
         Notes__c = worklog.description,
         Type__c = issueFields.issuetype.name,
-        Subject__c = issueFields.summary, // max 255
-        Opportunity__c = getSalesforceId(issueFields.customfield_10113)
+        Opportunity__c = getSalesforceId(issueFields.customfield_10113),
+        Subject__c = issueFields.summary // max 255
       ));
     } // for
 
     return timeEntries;
   } // method workLogsToTimeEntries()
+
+
+  // Reduces list size by removing items from end
+  private static void trimList(List<Time_Entry__c> timeEntries, Integer maxSize) {
+    Integer size = timeEntries.size();
+    for (Integer i = size - 1; i > maxSize - 1; i--) {
+      System.debug(i);
+      timeEntries.remove(i);
+    }
+  }
 
 
   private static void upsertWorklogsToSalesforce(List<Time_Entry__c> timeEntries, List<Time_Billing_Audit__c> logEntries) {
@@ -798,6 +795,9 @@ public class TimeAndBilling {
       // Database.executeBatch cannot be called from within a @future method (syncTempoWorklogsToSalesforce)
       // TimeAndBillingTempoUpsert timeEntriesBatch = new TimeAndBillingTempoUpsert(timeEntries);
       // Id batchId = Database.executeBatch(timeEntriesBatch);
+
+      trimList(timeEntries, 10000 - DML_ROW_BUFFER);
+
       upsert timeEntries Worklog_ID__c; // Non-batched way
       String msg = 'Upserted ' + String.valueOf(timeEntries.size()) + ' time entries';
       logEntry = createLogEntry('Salesforce: Upsert Time Entries', 'Success', msg, null, JSON.serializePretty(timeEntries));
@@ -962,31 +962,33 @@ public class TimeAndBilling {
     // Setup logging
     List<Time_Billing_Audit__c> logEntries = new List<Time_Billing_Audit__c>();
 
+    List<Time_Entry__c> timeEntries;
+
     // Run everything in a try/catch to ensure we do not lose log entries
     try {
       // Get Tempo worklogs
       List<TempoWorklog> tempoWorklogs = getWorklogsFromTempo(syncDate, logEntries);
-      List<Time_Entry__c> timeEntries = workLogsToTimeEntries(syncDate, tempoWorklogs, logEntries);
+      timeEntries = workLogsToTimeEntries(syncDate, tempoWorklogs, logEntries);
       upsertWorklogsToSalesforce(timeEntries, logEntries);
       // updateHoursActual();
     } catch (Exception eUpsertWorklogs) {
       System.debug(eUpsertWorklogs.getMessage());
-
       System.debug(eUpsertWorklogs.getStackTraceString());
     }
 
     // Insert any logEntries accumulated
+    System.debug('Inserted ' + String.valueOf(timeEntries.size()) + ' time entries. Now inserting ' + String.valueOf(logEntries.size()) + ' log entries.');
     insert logEntries;
   }
 
 
   // Create Map (key = Account.Id, value = List of Entitlements for that account)
-  private static Map<ID,List<Entitlement__c>> getEntitlementsMap() {
+  private static Map<ID,List<Entitlement__c>> getEntitlementsMap(Date asOfDate) {
     // List of entitlements relevant as of last month (as this is evaluated during invoice generation)
     List<Entitlement__c> entitlements = [
       SELECT Id, Account__c, Period__c, Hours__c, Starts__c, Ends__c, Hours_Used__c, Hours_Remaining__c
       FROM Entitlement__c
-      WHERE Starts__c <= LAST_MONTH AND Ends__c >= LAST_MONTH
+      WHERE Starts__c <= :asOfDate AND Ends__c >= :asOfDate
       ORDER BY Account__c, Starts__c
     ];
     Map<ID,List<Entitlement__c>> entitlementsMap = new Map<ID,List<Entitlement__c>>();
@@ -1069,10 +1071,11 @@ public class TimeAndBilling {
 
     // Log success
     String accountsInserted = JSON.serializePretty(accounts); // to prevent error if serialized JSON is long
-    logEntry = createLogEntry('Salesforce: Synchronization to Tempo Accounts', 'Success',
-      'Synchronized Salesforce customer Accounts to Tempo.', null, accountsInserted);
+    String msg = 'Synchronized ' + String.valueOf(accounts.size()) + ' Salesforce Customer Accounts with Tempo.';
+    logEntry = createLogEntry('Salesforce: Synchronization to Tempo Accounts', 'Success', msg,
+      null, accountsInserted);
     logEntries.add(logEntry);
-    System.debug('Success: Done synchronizing Accounts to Tempo.');
+    System.debug(msg);
 
     // Save any log entries in a batch
     insert logEntries;
@@ -1222,7 +1225,7 @@ public class TimeAndBilling {
     // Log success
     String ticketsImported = JSON.serializePretty(timeEntries); // Cannot do this as parameter to createLogEntry or errors
     // if we provide JSON.serializePretty(timeEntries) as the last parameter even though it's only 118,689 characters (max is 6m), we get an error so put in a variable instead
-    String msg = 'Success: Retrieved list of solved tickets and created ' + String.valueOf(timeEntries.size()) + ' time entrie(s).';
+    String msg = 'Retrieved list of solved tickets and created ' + String.valueOf(timeEntries.size()) + ' time entries.';
     logEntry = createLogEntry('Zendesk: Synchronization to Salesforce', 'Success',
       msg, null, ticketsImported);
     logEntries.add(logEntry);
@@ -1232,7 +1235,6 @@ public class TimeAndBilling {
   } // method syncZendeskToSalesforce()
 
 
-    
   // Update Time Entries to link to Opportunities
   @future
   public static void timeEntryToOpportunity(Date fromDate, Date toDate) {
@@ -1274,20 +1276,20 @@ public class TimeAndBilling {
   }
 
 
-
   // Return list of Time Entries not billed that are billable on an hourly basis (or deduct from burndown)
   private static List<SObject> getUnbilledTimeEntries(Date endDate, String customerType) {
     return [
-      SELECT Account__c, Resource__c, Role__c, Hourly_Cost__c, Hourly_Rate__c, Date_Worked__c, Hours__c,
+      SELECT Id, Account__c, Resource__c, Role__c, Hourly_Cost__c, Hourly_Rate__c, Date_Worked__c, Hours__c,
         Notes__c, Billing__c, Billed__c, Jira_Issue__c, Zendesk_Ticket__c, Worklog_ID__c,
         Account__r.Name, Account__r.c2g__CODASalesTaxStatus__c, Account__r.Platform__c,
         Account__r.Not_on_subscription__c, Type__c, Subject__c, Opportunity__c
       FROM Time_Entry__c
       WHERE
-        Billed__c = false AND Billing__c = 'Hourly' AND Date_Worked__c <= :endDate AND Account__r.Platform__c = :customerType
-      ORDER BY Account__c, Role__c, Date_Worked__c
+        Billed__c = false AND Billing__c = 'Hourly' AND Date_Worked__c <= :endDate AND
+        Account__r.Platform__c = :customerType AND Account__r.Type = 'Customer'
+      ORDER BY Account__r.Name, Role__c, Date_Worked__c
     ];
-  } // method getUnbilledTimeEntries()
+  }
 
 
   // Create FinancialForce Sales Invoice with sensible defaults
@@ -1304,9 +1306,6 @@ public class TimeAndBilling {
     // Set various properties
     c2g.CODAAPICommon.Reference currencyRef = new c2g.CODAAPICommon.Reference(); // https://help.financialforce.com/accounting-api-apex/2020.2/CODAAPICommon.htm#Reference
     currencyRef.Name = CURRENCY_NAME;
-    // Not needed but could use if FinancialForce's lookup based on name is less efficient
-    // ID currencyId = [SELECT Id FROM c2g__codaAccountingCurrency__c WHERE Name = :CURRENCY_NAME].Id;
-    // currencyRef.Id = currencyId;
     salesInvoice.InvoiceCurrency = currencyRef;
     salesInvoice.InvoiceDate = endDate;
     salesInvoice.DeriveDueDate = true;
@@ -1331,13 +1330,9 @@ public class TimeAndBilling {
     c2g.CODAAPICommon.Reference productRef = new c2g.CODAAPICommon.Reference();
     productRef.Name = SERVICE_PRODUCT;
     lineItem.Product = productRef;
-    // Tax Code (not needed right now)
-    // c2g.CODAAPICommon.Reference taxCodeRef = new c2g.CODAAPICommon.Reference();
-    // taxCodeRef.Name = 'NYT';
-    // lineItem.TaxCode1 = taxCodeRef;
     lineItem.LineDescription = description;
-    lineItem.Quantity = 0.000000;
-    lineItem.UnitPrice = hourlyRate.setScale(9); // FinancialForce errors if scale not 9
+    lineItem.Quantity = 0;
+    lineItem.UnitPrice = hourlyRate; // FinancialForce errors if scale not 9
 
     return lineItem;
   }
@@ -1352,18 +1347,19 @@ public class TimeAndBilling {
 
 
   // Bulk creates invoices and invoice line items from unbilled time entries (anything unbilled gets billed regardless of time period).
-  // For example, if run monthly, invoices will be monthly.
   @future(callout=true)
   public static void generateHourlyInvoices(Date endDate, String customerType) {
-    // List of time entries to bill (cast because static methods can't return lists of custom SObjects)
+    // List of time entries sorted by Account, Role, Date Worked (cast required as static methods cannot return lists of specific SObject)
     List<Time_Entry__c> timeEntries = (List<Time_Entry__c>) getUnbilledTimeEntries(endDate, customerType);
-    List<Time_Entry__c> splitTimeEntries = new List<Time_Entry__c>();
 
     // Bail out if no Time Entries to bill
     if (timeEntries.size() == 0) {
       System.debug('No ' + customerType + ' time entries to invoice.');
       return;
     }
+
+    // Billable Time Entries to be inserted for portion over an entitlement
+    List<Time_Entry__c> splitTimeEntries = new List<Time_Entry__c>();
 
     // Setup logging
     List<Time_Billing_Audit__c> logEntries = new List<Time_Billing_Audit__c>();
@@ -1379,7 +1375,7 @@ public class TimeAndBilling {
     List<Entitlement__c> entitlements = new List<Entitlement__c>();
 
     // Build map with key = Account.Id, value = List<Entitlement__c>
-    Map<ID,List<Entitlement__c>> entitlementsMap = getEntitlementsMap();
+    Map<ID,List<Entitlement__c>> entitlementsMap = getEntitlementsMap(endDate);
 
     // Initial values
     ID currentAccountId = null;
@@ -1388,13 +1384,11 @@ public class TimeAndBilling {
 
     // Loop through unbilled Hourly timeEntries ordered by Account, Role, Date Worked
     for (Time_Entry__c timeEntry: timeEntries) {
-
       // if Account has no Sales Tax Status, log then skip to the next entry (time entry will get picked up automatically once Account.Sales Tax Status is set)
       if (timeEntry.Account__r.c2g__CODASalesTaxStatus__c == null) {
         String msg = timeEntry.Account__r.Name + ' does not have a Sales Tax Status set.';
         logEntry = createLogEntry('FinancialForce: Get Sales Tax Status from Account', 'Warning',
-          msg,
-          null, JSON.serializePretty(timeEntry));
+          msg, null, JSON.serializePretty(timeEntry));
         logEntries.add(logEntry);
         System.debug(msg);
         continue; // skip to next
@@ -1403,13 +1397,14 @@ public class TimeAndBilling {
       // Improve code readability   
       Date dateWorked = timeEntry.Date_Worked__c;
       Boolean newInvoice = currentAccountId != timeEntry.Account__c;
-      Boolean newRole = currentRole != timeEntry.Role__c;
+      Boolean newRole = currentRole != timeEntry.Role__c || newInvoice;
       Boolean onSubscription = !timeEntry.Account__r.Not_on_subscription__c;
 
       if (newInvoice) { // first record or different account
         salesInvoice = createNewSalesInvoice(endDate, timeEntry.Account__c, timeEntry.Account__r.Name);
+        salesInvoices.add(salesInvoice);
 
-        // Get current account's entitlement covering Date Worked (if any)
+        // Current Account's entitlement based on Date Worked (if there is one)
         thisEntitlement = getCurrentEntitlement(entitlementsMap, timeEntry.Account__c, dateWorked);
 
         // No entitlement: 0, Period = Month: Hours Entitled each month, Period = Year: Hours Remaining
@@ -1417,86 +1412,81 @@ public class TimeAndBilling {
           entitlementRemaining = 0;
         } else {
           entitlementRemaining = thisEntitlement.Period__c == 'Month' ? thisEntitlement.Hours__c : thisEntitlement.Hours_Remaining__c;
-          entitlements.add(thisEntitlement);
+          entitlements.add(thisEntitlement); // Updates to Hours_Used__c for Yearly entitlements
         }
 
+        currentAccountId = timeEntry.Account__c; // establish current account
+        System.debug('New invoice: ' + timeEntry.Account__r.Name + ', Entitlement remaining = ' + String.valueOf(entitlementRemaining));
+      }
+
+      // Create new line item for each role and roll-up hours
+      if (newRole) {
         lineItem = createNewLineItem(timeEntry.Account__r.Platform__c, timeEntry.Role__c, timeEntry.Hourly_Rate__c);
         salesInvoice.LineItems.LineItemList.add(lineItem);
-        salesInvoices.add(salesInvoice);
-
-        // Revise current state
-        currentAccountId = timeEntry.Account__c;
-        currentRole = timeEntry.Role__c;
-      } else {
-        if (newRole) {
-          lineItem = createNewLineItem(timeEntry.Account__r.Platform__c, timeEntry.Role__c, timeEntry.Hourly_Rate__c);
-          salesInvoice.LineItems.LineItemList.add(lineItem);
-          currentRole = timeEntry.Role__c;
-        }
+        currentRole = timeEntry.Role__c; // establish current role
       }
 
       // Handle whether the time entry is part of the burndown, partially part of the burndown, or not part of the burndown
-      Boolean hasEnough = entitlementRemaining - timeEntry.Hours__c >= 0;
-      Boolean almostEnough = entitlementRemaining > 0 && entitlementRemaining - timeEntry.Hours__c < 0;
+      Boolean enough = entitlementRemaining - timeEntry.Hours__c >= 0;
+      Boolean almostEnough = entitlementRemaining > 0 && !enough;
 
-      if (hasEnough) {
-        lineItem.UnitPrice = 0.000000000; // covered by burndown
-        timeEntry.Hourly_Rate__c = 0; // covered by burndown
-        lineItem.Quantity += timeEntry.Hours__c.setScale(6);
+      if (enough) {
+        lineItem.Quantity += timeEntry.Hours__c.setScale(2);
+        lineItem.UnitPrice = 0;
+        timeEntry.Hourly_Rate__c = 0; // override - covered by burndown
         entitlementRemaining -= timeEntry.Hours__c;
-        if (thisEntitlement != null) timeEntry.Entitlement__c = thisEntitlement.Id; // Testing for null value before assignment
       } else if (almostEnough) { // split time entry and invoice line item - the first non-billable, the second billable
-        lineItem.UnitPrice = 0.000000000;
-        lineItem.Quantity = entitlementRemaining.setScale(6); // consumes amount remaining
-        salesInvoice.LineItems.LineItemList.add(lineItem);
+        // Portion that's burndown for existing invoice line item
+        lineItem.Quantity += entitlementRemaining.setScale(2); // consumes amount remaining
+        lineItem.UnitPrice = 0;
+        Decimal portionOverEntitlement = timeEntry.Hours__c - entitlementRemaining;
+        timeEntry.Hours__c = entitlementRemaining; // reduce hours on original time entry as portion will be split
 
-        // Time Entry for portion covered by entitlement
+        entitlementRemaining = 0; // now consumed by lineItem/timeEntry
+
+        // Create split
         Time_Entry__c splitTimeEntry = new Time_Entry__c(
           Date_Worked__c = dateWorked,
           Account__c = timeEntry.Account__c,
           Resource__c = timeEntry.Resource__c,
           Role__c = timeEntry.Role__c,
-          Hours__c = entitlementRemaining,
-          Notes__c = timeEntry.Notes__c,
-          Hourly_Rate__c = 0,
+          Hours__c = portionOverEntitlement,
+          Notes__c = timeEntry.Notes__c + ' Original Worklog: ' + String.valueOf(timeEntry.Worklog_ID__c) + ', Original Zendesk Ticket: ' + String.valueOf(timeEntry.Zendesk_Ticket__c) + '.',
+          Hourly_Rate__c = timeEntry.Hourly_Rate__c,
           Billed__c = true,
-          Billing__c = 'Hourly', // if Billing = Hourly and Hourly Rate = $0, it's burndown
-          Entitlement__c = thisEntitlement.Id, // would never occur if there's no entitlement record
+          Billing__c = 'Hourly',
+          Entitlement__c = thisEntitlement.Id, // over entitlement - track overage
           Jira_Issue__c = timeEntry.Jira_Issue__c,
-          Worklog_ID__c = timeEntry.Worklog_ID__c != null ? - timeEntry.Worklog_ID__c : null,
-          Zendesk_Ticket__c = timeEntry.Zendesk_Ticket__c != null ? - timeEntry.Zendesk_Ticket__c : null,
           Type__c = timeEntry.Type__c,
           Subject__c = timeEntry.Subject__c,
           Opportunity__c = timeEntry.Opportunity__c
         );
         splitTimeEntries.add(splitTimeEntry);
 
-        // Billable invoice line item for remainder
-        lineItem = createNewLineItem(timeEntry.Account__r.Platform__c, timeEntry.Role__c, timeEntry.Hourly_Rate__c);
-        Decimal portionOverEntitlement = timeEntry.Hours__c - entitlementRemaining;
-        lineItem.Quantity = portionOverEntitlement.setScale(6);
-        timeEntry.Hours__c = portionOverEntitlement;
+        timeEntry.Hourly_Rate__c = 0; // Initial time entry is burndown (delayed setting for split to pickup rate)
 
-        entitlementRemaining = 0; // consumed
+        // Billable invoice line item for remainder
+        lineItem = createNewLineItem(timeEntry.Account__r.Platform__c, splitTimeEntry.Role__c, splitTimeEntry.Hourly_Rate__c);
+        salesInvoice.LineItems.LineItemList.add(lineItem);
+        lineItem.Quantity = portionOverEntitlement.setScale(2); // starting quantity for new line item
       } else { // no entitlement, not in entitlement range or ran out of entitled hours
-        lineItem.Quantity += timeEntry.Hours__c.setScale(6); // FinancialForce errors if scale not 6 (oddly specific)
+        lineItem.Quantity += timeEntry.Hours__c.setScale(2); // FinancialForce errors if scale not 6 (oddly specific)
       }
 
-      // Update Entitlement record (if there is one)
-      if (thisEntitlement != null) thisEntitlement.Hours_Used__c += timeEntry.Hours__c;
+      // Update Entitlement record (if there is one); hours remaining may go negative (but not a bug)
+      if (thisEntitlement != null) {
+        timeEntry.Entitlement__c = thisEntitlement.Id;
+        thisEntitlement.Hours_Used__c += timeEntry.Hours__c;
+      }
 
       // if there's at least one billable line item, flag invoice not to be deleted (note: IsDeleted is otherwise null)
       if (lineItem.Quantity > 0 && lineItem.UnitPrice > 0) salesInvoice.IsDeleted = false;
-      
-      // Mark time entry as billed, upsert later
+
       timeEntry.Billed__c = true; // Mark Time Entry as billed
     } // for time entries
 
-    // Bulk create invoices
-    System.debug(salesInvoices);
-
     // Reverse iterate over salesInvoices and delete zero-dollar ones.
-    // TODO: If we want summaries of starting and ending balances, create $0 Sales Invoices (remove this block)
+    // If we want summaries of starting and ending balances, create $0 Sales Invoices (remove this block)
     for (Integer i = (salesInvoices.size()-1); i>= 0; i--) {
       c2g.CODAAPIInvoiceTypes_10_0.Invoice invoice = salesInvoices[i];
       if (invoice.IsDeleted == null) {
@@ -1508,7 +1498,7 @@ public class TimeAndBilling {
     c2g.CODAAPISalesInvoice_10_0.BulkCreateInvoice(createCompanyContext(), salesInvoices);
 
     // Updated Time Entries as billed and insert any splits needed
-    upsert timeEntries;
+    update timeEntries;
     insert splitTimeEntries;
 
     // Update Entitlements to track burndown
@@ -1516,10 +1506,11 @@ public class TimeAndBilling {
 
     // Log success
     String timeEntriesInvoiced = JSON.serializePretty(timeEntries); // prevents error if serialized JSON is long
+    String msg = 'Created ' + String.valueOf(salesInvoices.size()) + ' ' + customerType + ' Sales Invoices.';
     logEntry = createLogEntry('FinancialForce Accounting: Invoices from Time Entries', 'Success',
-      'Bulk created Sales Invoices.', null, timeEntriesInvoiced);
+      msg, null, timeEntriesInvoiced);
     logEntries.add(logEntry);
-    System.debug('Success: Created ' + String.valueOf(salesInvoices.size()) + ' ' + customerType + ' Sales Invoices.');
+    System.debug(msg);
 
     insert logEntries;
   } // method generateHourlyInvoices()

@@ -1,7 +1,6 @@
 # Product Backlog
 
 ## Bugs
-- [High] If there are rates for a customer but none are used, fallback to rack rates not working (CRUM)
 - [Low] Zendesk ticket import uses the "updated_at" date rather than "solved_at" because of API limitations. As we are importing daily and billing monthly, if updated_at changes, it should not affect invoicing so this is classified as low priority because of that.
 
 ## Features
