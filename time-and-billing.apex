@@ -487,7 +487,7 @@ public class TimeAndBilling {
     // Search for issues with worklogs updated since syncDate
     JiraQuery jiraQuery = new JiraQuery();
     // Filtering on worklogDate >= 2021-01-01 means "only show issues with a worklog" (dropped ,'GMT' from syncDate.format)
-    jiraQuery.jql = 'worklogDate >= 2021-01-01 AND project in (AM,CAR,CP,DS,IMTI,ISD,PS,VEN,UT) AND updatedDate>=' + syncDate.format('yyyy-MM-dd');
+    jiraQuery.jql = 'worklogDate >= 2021-01-01 AND project in (AM,CAR,CP,DS,GS,IMTI,ISD,PS,VEN,UT) AND updatedDate>=' + syncDate.format('yyyy-MM-dd');
     // BUG/FLAW: Jira IGNORES maxResults = 1000 unless the fields are id or key - otherwise 100
     jiraQuery.maxResults = 1000;
     jiraQuery.fields = new String[]{'issuetype', 'summary', 'customfield_10090', 'customfield_10113', 'customfield_10086'};
@@ -533,7 +533,7 @@ public class TimeAndBilling {
       SELECT Id, Name, Platform__c, Owner.Name, Owner.Email, Not_on_subscription__c
       FROM Account
       WHERE (Type IN ('Customer','Prospect') AND
-        Platform__c != null) OR Name = :COMPANY_ACCOUNT_NAME
+        Platform__c IN ('Carrier', 'Vendor', 'IMTI')) OR Name = :COMPANY_ACCOUNT_NAME
       ORDER BY Platform__c, Name
     ];
   }
