@@ -61,14 +61,18 @@ global with sharing class TimeAndBillingService {
     }
 
     // Get Opportunity Id to link to Time Entry
-    String billing = billingType;
     ID opportunityId = getSalesforceId(opportunityUrl);
-    try {
-      billing = [SELECT Billing__c FROM Opportunity WHERE Id = :opportunityId].Billing__c;
-      if (billing == null) billing = billingType;
-    } catch (Exception eOpportunityLookup) {
-      System.debug('No opportunity was found.');
+
+    // If Jira Billing field is null (and there is an Opportunity), use Billing from Opportunity
+    String billing = billingType;
+    if (billing == null && opportunityId != null) {
+      try {
+        billing = [SELECT Billing__c FROM Opportunity WHERE Id = :opportunityId].Billing__c;
+      } catch (Exception eOpportunityLookup) {
+        System.debug('No opportunity was found.');
+      }
     }
+    if (billing == null) billing = 'None';
 
     // Populate rate maps
     Map<String,Decimal> customerRatesMap = getCustomerRates(accountId);
@@ -77,11 +81,13 @@ global with sharing class TimeAndBillingService {
     // Find Time Entries for this Jira Issue
     List<Time_Entry__c> timeEntries = [
       SELECT
-        Account__c, Billed__c, Hourly_Rate__c, Billing__c, Role__c,
-        Opportunity__c, Type__c, Subject__c
+        Account__c, Billed__c, Hours__c, Hourly_Rate__c, Hourly_Cost__c, Billing__c, Role__c, Activity__c, Zendesk_Ticket__c, Jira_Issue__c,
+        Opportunity__c, Type__c, Subject__c, Entitlement__c, Notes__c, Resource__c, Date_Worked__c
       FROM Time_Entry__c
       WHERE Jira_Issue__c = :issueKey AND Worklog_ID__c != null
     ];
+
+    List<Time_Entry__c> newTimeEntries = new List<Time_Entry__c>();
 
     // Loop through Time Entries for this Jira Issue
     for (Time_Entry__c timeEntry: timeEntries) {
@@ -111,10 +117,27 @@ global with sharing class TimeAndBillingService {
       timeEntry.Subject__c = subject;
       timeEntry.Type__c = issueType;
       timeEntry.Opportunity__c = opportunityId;
+
+      // If billed and new Account is not the original, must reverse charge and create new
+      if (timeEntry.Billed__c && (timeEntry.Account__c != accountId || timeEntry.Billing__c != billing)) {
+        Time_Entry__c reversedTimeEntry = timeEntry.clone(false, false, false, false);
+        reversedTimeEntry.Hours__c = - timeEntry.Hours__c;
+        reversedTimeEntry.Billed__c = false;
+        reversedTimeEntry.Notes__c = 'Correction for time billed to wrong account';
+        newTimeEntries.add(reversedTimeEntry);
+        Time_Entry__c newTimeEntry = timeEntry.clone(false, false, false, false);
+        newTimeEntry.Account__c = accountId;
+        newTimeEntry.Billed__c = false;
+        newTimeEntry.Billing__c = billing;
+        newTimeEntries.add(newTimeEntry);
+      }
     }
     
     update timeEntries;
     System.debug(timeEntries);
+
+    insert newTimeEntries;
+    System.debug(newTimeEntries);
 
     res.statusCode = 204; // Successfully updated
   }
