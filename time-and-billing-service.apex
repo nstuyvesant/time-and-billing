@@ -119,6 +119,7 @@ global with sharing class TimeAndBillingService {
       timeEntry.Opportunity__c = opportunityId;
 
       // If billed and new Account is not the original, must reverse charge and create new
+/*
       if (timeEntry.Billed__c && (timeEntry.Account__c != accountId || timeEntry.Billing__c != billing)) {
         Time_Entry__c reversedTimeEntry = timeEntry.clone(false, false, false, false);
         reversedTimeEntry.Hours__c = - timeEntry.Hours__c;
@@ -131,6 +132,7 @@ global with sharing class TimeAndBillingService {
         newTimeEntry.Billing__c = billing;
         newTimeEntries.add(newTimeEntry);
       }
+*/
     }
     
     update timeEntries;
