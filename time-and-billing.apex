@@ -205,7 +205,7 @@ public class TimeAndBilling {
   private static final String ZENDESK_BASE_URI = 'https://utilant.zendesk.com/api/v2';
   private static final String ZENDESK_ENDPOINT = 'callout:Zendesk/api/v2';
   private static final Integer ZENDESK_MAX_RECORDS = 100;
-  private static final String[] ZENDESK_NONBILLABLE_TYPES = new String[]{'Defect', 'Incident', 'Service degradation', 'Outage'}; // latter 2 are deprecated
+  private static final String[] ZENDESK_NONBILLABLE_TYPES = new String[]{'Defect', 'Incident', 'Problem'}; // latter 2 are deprecated
   private static final Long ZENDESK_SECONDS_FIELD = 360030708654L;
   private static final Long ZENDESK_TYPE_FIELD = 360030745593L;
   private static final Integer DML_ROW_BUFFER = 50; // prevent DML 10K limit from being hit
