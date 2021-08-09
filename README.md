@@ -93,5 +93,4 @@ Three Salesforce Apex classes will be created:
 
 ## Known Limitations
 - Salesforce limits the number of queries, data manipulation language (DML), and REST Callouts on a per hour basis. The code is designed to bulkify requests often at the expense of simplicity.
-- This integration will not detect Tempo Work Logs deleted that were previously synchronized.
 - When deploying code from Salesforce Sandbox to Production, pick "Run specified tests" and paste TimeAndBillingMonthlySpec,TimeAndBillingSpec,TimeAndBillingServiceSpec,TimeAndBillingDailySpec into the text area field then click OK.
